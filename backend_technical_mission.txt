@@ -1,0 +1,161 @@
+================================================================================
+YUK 24 — BACKEND TECHNICAL MISSION
+Express.js + MongoDB
+================================================================================
+
+1. PROJECT OVERVIEW
+------------------
+Build a REST API backend for the YUK 24 frontend (on-demand cargo delivery).
+Stack: Node.js, Express.js, MongoDB (with Mongoose).
+The backend will replace current frontend mocks (orders, drivers, auth, stats)
+and add features that make the service more reliable and comfortable for
+users, drivers, and admins.
+
+2. TECHNOLOGY STACK
+------------------
+- Runtime: Node.js (LTS)
+- Framework: Express.js
+- Database: MongoDB
+- ODM: Mongoose
+- Auth: JWT (access + optional refresh tokens)
+- Validation: express-validator or Joi
+- Env: dotenv; config: .env for ports, MongoDB URI, JWT secrets, ORS API key proxy (optional)
+
+3. CORE ENTITIES (MongoDB COLLECTIONS)
+--------------------------------------
+
+3.1 Users (customers)
+- _id, phone (unique), phoneCountry, createdAt
+- Optional: name, savedAddresses[] (label, coords), preferredLanguage
+- No password for minimal flow; auth by phone + OTP or simple PIN later
+- For MVP: orders can be created without user account (guest orders by phone);
+  optional registration to see order history and save addresses
+
+3.2 Drivers
+- _id, username (unique), passwordHash, active (boolean), createdAt
+- Optional: name, phone, vehicleInfo, currentLocation (GeoJSON), lastSeenAt
+- Stats derived: completedOrders, cancelledOrders, avgDeliveryMin (or store in DriverStats collection)
+
+3.3 Admins
+- _id, username (unique), passwordHash, createdAt
+- Single role for MVP (admin); later: roles array
+
+3.4 Orders
+- _id, orderId (human-readable, e.g. USR-0001 or ORD-1001)
+- customerPhone, customerName (optional)
+- pickup: { label, coords: [lat, lng] }
+- delivery: { label, coords: [lat, lng] }
+- loadSize (xsmall|small|medium|large|xlarge), unloading (boolean)
+- price (number), distanceKm, durationMin (optional, for display)
+- status: queue | process | pickedUp | delivered | cancelled
+- driverId (ref Driver, optional until assigned)
+- cancelReason (string, optional)
+- createdAt, completedAt (optional)
+- userId (ref User, optional for guest orders)
+- review: { rating, comment } (optional, after delivered)
+
+3.5 Reviews (optional separate collection)
+- _id, orderId (ref Order), driverId (ref Driver), rating, comment, customerName/phone, createdAt
+- Allows querying reviews by driver for admin/driver app
+
+4. AUTHENTICATION & AUTHORIZATION
+---------------------------------
+- Admin: POST /api/auth/admin/login (username, password) → JWT; credentials: admin / admin123 (or from env).
+- Driver: POST /api/auth/driver/login (username, password) → JWT; check driver.active.
+- Customer (optional for MVP): POST /api/auth/customer/request-otp (phone), POST /api/auth/customer/verify (phone, code) → JWT.
+- Guards: middleware that check JWT and role (admin, driver, customer); attach user/driver/admin to req.
+
+5. API ENDPOINTS (REST)
+----------------------
+
+5.1 Public / shared
+- GET  /api/health — health check
+- POST /api/route — body: { start, end } (coords); proxy to ORS or compute; return { distanceKm, durationMin, geometry } (optional)
+- POST /api/price — body: { distanceKm, loadSize, unloading }; return { price } (server-side pricing, single source of truth)
+
+5.2 Customer (user) — can be unauthenticated for create order
+- POST /api/orders — create order (phone, pickup, delivery, loadSize, unloading, price, distanceKm, durationMin, customerName?)
+  → validate; create Order with status queue; return order with id and status
+- GET  /api/orders/by-phone?phone=... — list orders for phone (for “My orders”); optional auth later
+- GET  /api/orders/:id — order details by id (and optionally phone so only owner can see)
+- POST /api/orders/:id/review — body: { rating, comment }; only when status delivered; attach review to order (or Reviews collection)
+
+5.3 Driver
+- GET  /api/driver/orders/available — list orders with status queue (or “pending”), optionally filtered by region/proximity
+- POST /api/driver/orders/:id/accept — driver accepts order; set driverId, status process
+- POST /api/driver/orders/:id/cancel — driver cancels; body: { reason }; status → cancelled, cancelReason set
+- POST /api/driver/orders/:id/picked-up — status → pickedUp
+- POST /api/driver/orders/:id/delivered — status → delivered; optional body: { completedAt }
+- GET  /api/driver/me — current driver profile + stats (completedOrders, etc.)
+- PATCH /api/driver/location — body: { lat, lng }; update driver’s currentLocation and lastSeenAt (for future “nearest driver” logic)
+
+5.4 Admin
+- GET  /api/admin/stats — totalOrders, completed, revenue, activeDrivers, totalDrivers
+- GET  /api/admin/orders — list all orders (paginated, filter by status, date range, search by id/phone)
+- GET  /api/admin/orders/:id — order details
+- GET  /api/admin/drivers — list drivers with stats
+- GET  /api/admin/drivers/:id — driver detail + orders + reviews
+- POST /api/admin/drivers — create driver (username, password, active)
+- PATCH /api/admin/drivers/:id — update driver (username, active, etc.)
+- DELETE /api/admin/drivers/:id — deactivate or delete driver
+- GET  /api/admin/charts/orders — data for orders chart (e.g. last 30 days)
+- GET  /api/admin/charts/revenue — data for revenue chart
+
+6. FEATURES FOR USER COMFORT & RELIABILITY
+-----------------------------------------
+- Persistent orders: every booking stored in DB; user can see “My orders” by phone without losing data on refresh.
+- Real-time flow: driver sees real queue (GET available orders); user’s order appears in queue until a driver accepts.
+- Status updates: when driver accepts / picks up / delivers, order status changes; frontend can poll GET /api/orders/:id or use WebSocket later for live updates.
+- Single source of truth for price: POST /api/price so frontend and backend always use same formula (mirror pricing.js logic on server).
+- Saved/recent addresses: if User model is used, save addresses per phone/user to speed up rebooking.
+- Reviews: store ratings and comments; show in driver profile and in user order history.
+- Driver location: PATCH /api/driver/location enables future “nearest driver” or ETA.
+- Admin can cancel orders or assign driver manually if needed (optional endpoint).
+- Pagination and filters on admin orders list for large datasets.
+- Validation: all inputs validated (phone format, coords, loadSize enum, price consistency) to avoid bad data.
+
+7. COMFORT-ORIENTED IMPROVEMENTS (BACKEND SUPPORT)
+--------------------------------------------------
+- Order history by phone: no login required for first version; “My orders” loads by phone number.
+- Consistent pricing: backend calculates price from distance + loadSize + unloading; frontend can pre-calculate for display but order creation sends same params and server recomputes/validates.
+- Idempotency: optional idempotency key on POST /api/orders to prevent duplicate charges on retry.
+- Soft delete: drivers and orders use soft delete (deletedAt) so stats and history remain consistent.
+- Indexes: compound indexes on Order (status, createdAt), (driverId, status); Driver (active, lastSeenAt); User (phone).
+
+8. SECURITY & ENVIRONMENT
+-------------------------
+- CORS: allow frontend origin (e.g. VITE_APP_URL or list of origins).
+- Rate limiting: express-rate-limit on auth and public endpoints.
+- Helmet: use Helmet for security headers.
+- Env vars: PORT, MONGODB_URI, JWT_SECRET, JWT_EXPIRY, ADMIN_USERNAME, ADMIN_PASSWORD_HASH (or plain for MVP), optional ORS_API_KEY for server-side routing.
+
+9. IMPLEMENTATION PHASES
+------------------------
+Phase 1 (MVP)
+- Express app, MongoDB connection, Mongoose models (Order, Driver, Admin).
+- Auth: admin login, driver login (JWT).
+- Orders: create order (POST), get by id, get by phone; driver: list available, accept, cancel, picked-up, delivered.
+- Admin: stats, list orders, list drivers; driver CRUD.
+- Pricing endpoint; optional route proxy.
+
+Phase 2
+- Reviews (persist on order or Reviews collection); GET driver reviews for admin/driver app.
+- Pagination and filters for admin orders.
+- Driver location update; optional “nearest driver” or simple queue by region.
+
+Phase 3
+- Customer auth (OTP or PIN) and “My orders” tied to account; saved addresses.
+- WebSocket or SSE for order status updates to user and driver.
+- Optional: payment webhook or payment status field for future integration.
+
+10. DELIVERABLES
+----------------
+- REST API as described above.
+- README with: setup (Node version, npm install, .env.example), how to run (npm run dev), main env variables.
+- .env.example: PORT, MONGODB_URI, JWT_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD (or hash).
+- Optional: Postman/Insomnia collection or OpenAPI spec for key endpoints.
+
+================================================================================
+Document version: 1.0
+Target frontend: yuk24-frontend (React, Vite)
+================================================================================

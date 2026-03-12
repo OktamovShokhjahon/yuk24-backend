@@ -1,0 +1,226 @@
+================================================================================
+YUK 24 — BACKEND API DOCUMENTATION FOR FRONTEND INTEGRATION
+Use this document to connect the YUK 24 frontend (React/Vite) to the backend API.
+AI/developers: replace frontend mocks with calls to these endpoints.
+================================================================================
+
+1. BASE URL AND CONFIGURATION
+------------------------------
+- Default base URL (development): http://localhost:5000
+- All API paths are prefixed with: /api (e.g. /api/health, /api/orders)
+- Frontend should use an env variable for the API base, e.g.:
+  VITE_API_URL=http://localhost:5000
+  Then in code: const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+- Content-Type: application/json for all request bodies.
+- CORS: backend allows origin from env VITE_APP_URL (or *). Set VITE_APP_URL in backend .env to the frontend dev URL (e.g. http://localhost:5173) if needed.
+
+2. AUTHENTICATION
+-----------------
+- Backend uses JWT. After login, send the token on protected requests in the header:
+  Authorization: Bearer <token>
+- Store the token (e.g. localStorage or memory) and attach to every request that requires admin or driver role.
+
+2.1 Admin login
+- POST /api/auth/admin/login
+- Body (JSON): { "username": "admin", "password": "admin123" }
+- Success 200: { "token": "<jwt>", "user": { "id": "<_id>", "username": "admin", "role": "admin" } }
+- Error 401: { "error": "Invalid credentials" }
+
+2.2 Driver login
+- POST /api/auth/driver/login
+- Body (JSON): { "username": "<driver_username>", "password": "<password>" }
+- Success 200: { "token": "<jwt>", "user": { "id": "<_id>", "username": "...", "name": "...", "active": true, "role": "driver" } }
+- Error 401: { "error": "Invalid credentials" }
+- Error 403: { "error": "Account inactive", "message": "..." } (driver is deactivated)
+
+3. PUBLIC ENDPOINTS (no auth)
+-----------------------------
+
+3.1 Health check
+- GET /api/health
+- Success 200: { "ok": true, "db": "connected", "timestamp": "<ISO string>" }
+- Error 503 if DB down: { "ok": false, "db": "disconnected", ... }
+
+3.2 Route / distance and duration
+- POST /api/route
+- Body (JSON): { "start": [lat, lng], "end": [lat, lng] }
+- Success 200: { "distanceKm": number, "durationMin": number, "geometry": null or GeoJSON }
+- Use this to get distance/duration before calculating price or creating order. Backend may use OpenRouteService if ORS_API_KEY is set; otherwise Haversine fallback.
+
+3.3 Price calculation (single source of truth)
+- POST /api/price
+- Body (JSON): { "distanceKm": number, "loadSize": "xsmall"|"small"|"medium"|"large"|"xlarge", "unloading": boolean }
+- Success 200: { "price": number }
+- Frontend should call this to get the price to display and to send when creating an order. Backend formula: base + (distanceKm - 5) * 2 per km, multiplied by load size (xsmall=1, small=1.2, medium=1.5, large=2, xlarge=2.5), plus 5 if unloading.
+
+4. CUSTOMER / ORDER ENDPOINTS (no auth for create and list by phone)
+--------------------------------------------------------------------
+
+4.1 Create order
+- POST /api/orders
+- Body (JSON):
+  {
+    "customerPhone": string (required),
+    "customerName": string (optional),
+    "pickup": { "label": string, "coords": [lat, lng] } (required),
+    "delivery": { "label": string, "coords": [lat, lng] } (required),
+    "loadSize": "xsmall"|"small"|"medium"|"large"|"xlarge" (required),
+    "unloading": boolean (optional, default false),
+    "price": number (required; backend will correct to server-calculated price if different),
+    "distanceKm": number (required),
+    "durationMin": number (optional),
+    "userId": string (optional, MongoDB ObjectId if user account exists)
+  }
+- Success 201: returns the created order object with _id, orderId (e.g. ORD-1001), status: "queue", and all fields.
+- Error 400: { "error": "Validation failed", "details": [ { "field": "...", "message": "..." } ] }
+
+4.2 List orders by phone ("My orders")
+- GET /api/orders/by-phone?phone=<phone_number>
+- Success 200: array of order objects (newest first), each with driverId populated (username, name).
+- No auth required; anyone with the phone can list. Optional: pass ?phone= when opening order detail to enforce ownership.
+
+4.3 Get order by id
+- GET /api/orders/:id
+- Optional query: ?phone=<phone> — if provided, backend returns 403 if order.customerPhone !== phone.
+- Success 200: single order object; driverId populated (username, name, phone).
+- Error 404: { "error": "Order not found" }
+- Error 403: { "error": "Forbidden", "message": "Order does not belong to this phone" }
+
+4.4 Add review (only when order status is delivered)
+- POST /api/orders/:id/review
+- Body (JSON): { "rating": number (1-5, required), "comment": string (optional) }
+- Success 200: returns updated order (with review attached).
+- Error 400: "Can only review delivered orders" or "Order already reviewed"
+- Error 404: "Order not found"
+
+5. DRIVER ENDPOINTS (require Authorization: Bearer <driver_token>)
+--------------------------------------------------------------------
+
+5.1 List available orders (queue)
+- GET /api/driver/orders/available
+- Success 200: array of orders with status "queue" (oldest first).
+
+5.2 Accept order
+- POST /api/driver/orders/:id/accept
+- Success 200: updated order (driverId set, status "process").
+- Error 400: "Order not available" / "Order is no longer in queue"
+- Error 404: "Order not found"
+
+5.3 Cancel order (driver)
+- POST /api/driver/orders/:id/cancel
+- Body (JSON): { "reason": string (optional) }
+- Success 200: updated order (status "cancelled", cancelReason set).
+
+5.4 Mark picked up
+- POST /api/driver/orders/:id/picked-up
+- Success 200: updated order (status "pickedUp").
+
+5.5 Mark delivered
+- POST /api/driver/orders/:id/delivered
+- Body (JSON): { "completedAt": "<ISO date string>" (optional) }
+- Success 200: updated order (status "delivered", completedAt set).
+
+5.6 Driver profile and stats
+- GET /api/driver/me
+- Success 200: driver object plus stats: { ...driver, "stats": { "completedOrders": number, "cancelledOrders": number, "avgDeliveryMin": number|null } }
+
+5.7 Update driver location
+- PATCH /api/driver/location
+- Body (JSON): { "lat": number, "lng": number }
+- Success 200: { "ok": true, "lastSeenAt": "<ISO date>" }
+
+6. ADMIN ENDPOINTS (require Authorization: Bearer <admin_token>)
+-----------------------------------------------------------------
+
+6.1 Dashboard stats
+- GET /api/admin/stats
+- Success 200: { "totalOrders": number, "completedOrders": number, "revenue": number, "activeDrivers": number, "totalDrivers": number }
+
+6.2 List orders (paginated, filterable)
+- GET /api/admin/orders
+- Query params: page (default 1), limit (default 20, max 50), status (optional), search (optional, matches orderId/customerPhone/customerName), dateFrom (ISO), dateTo (ISO).
+- Success 200: { "orders": [ ... ], "pagination": { "page", "limit", "total", "pages" } }
+
+6.3 Get order by id
+- GET /api/admin/orders/:id
+- Success 200: order object. Error 404 if not found.
+
+6.4 List drivers
+- GET /api/admin/drivers
+- Success 200: array of drivers, each with completedOrders and cancelledOrders counts.
+
+6.5 Get driver by id
+- GET /api/admin/drivers/:id
+- Success 200: driver object plus stats, orders (last 50), reviews. Error 404 if not found.
+
+6.6 Create driver
+- POST /api/admin/drivers
+- Body (JSON): { "username": string (required), "password": string (required, min 6), "active": boolean (optional, default true), "name": string (optional), "phone": string (optional), "vehicleInfo": string (optional) }
+- Success 201: created driver (passwordHash not returned).
+
+6.7 Update driver
+- PATCH /api/admin/drivers/:id
+- Body (JSON): any of username, active, name, phone, vehicleInfo, password (min 6). All optional.
+- Success 200: updated driver.
+
+6.8 Deactivate driver (soft delete)
+- DELETE /api/admin/drivers/:id
+- Success 200: { "message": "Driver deactivated" }
+
+6.9 Charts — orders per day
+- GET /api/admin/charts/orders?days=30
+- Query: days (default 30, 7–90).
+- Success 200: [ { "date": "YYYY-MM-DD", "orders": number }, ... ]
+
+6.10 Charts — revenue per day
+- GET /api/admin/charts/revenue?days=30
+- Query: days (default 30, 7–90).
+- Success 200: [ { "date": "YYYY-MM-DD", "revenue": number }, ... ]
+
+7. ORDER STATUS FLOW
+--------------------
+queue → process (driver accepted) → pickedUp → delivered
+Any state can go to cancelled (driver or admin; cancelReason optional).
+
+8. ERROR RESPONSES
+-----------------
+- 400: validation or business rule error. Body: { "error": string, optional "message", optional "details": [...] }
+- 401: missing or invalid token / wrong role. Body: { "error": "Unauthorized", optional "message" }
+- 403: forbidden (e.g. order not owned by phone). Body: { "error": "Forbidden", optional "message" }
+- 404: resource not found. Body: { "error": "Not found" or "Order not found" etc. }
+- 429: rate limit. Body: { "error": "Too many requests" } or similar
+- 500: server error. Body: { "error": string }
+
+9. FRONTEND INTEGRATION CHECKLIST (for AI/developer)
+-----------------------------------------------------
+- Add env VITE_API_URL (or VITE_APP_API_URL) pointing to backend base URL.
+- Create an API client (e.g. fetch wrapper) that:
+  - Uses base URL from env.
+  - Sets Content-Type: application/json for POST/PATCH.
+  - Sends Authorization: Bearer <token> when token exists (admin/driver flows).
+- Replace mock data:
+  - Orders list (customer): GET /api/orders/by-phone?phone=...
+  - Create order: POST /api/orders with body from form; optionally GET /api/route first for distance/duration, then GET /api/price for price.
+  - Order detail: GET /api/orders/:id (and ?phone= if restricting by owner).
+  - Submit review: POST /api/orders/:id/review.
+  - Driver available orders: GET /api/driver/orders/available (with driver token).
+  - Driver accept/cancel/picked-up/delivered: POST /api/driver/orders/:id/<action> (with driver token).
+  - Driver profile: GET /api/driver/me (with driver token).
+  - Driver location: PATCH /api/driver/location (with driver token).
+  - Admin login: POST /api/auth/admin/login; store token.
+  - Admin stats: GET /api/admin/stats (with admin token).
+  - Admin orders: GET /api/admin/orders?page=&limit=&status=&search=&dateFrom=&dateTo= (with admin token).
+  - Admin drivers: GET /api/admin/drivers, GET /api/admin/drivers/:id, POST/PATCH/DELETE /api/admin/drivers (with admin token).
+  - Admin charts: GET /api/admin/charts/orders?days=30, GET /api/admin/charts/revenue?days=30 (with admin token).
+- Use GET /api/health to check backend availability if needed.
+- Poll GET /api/orders/:id for order status updates until WebSocket/SSE is added later.
+
+10. ID FORMATS
+--------------
+- Order id in URL: MongoDB _id (24-char hex string).
+- Order orderId in response: human-readable string like "ORD-1001".
+- Use _id for API calls (GET /api/orders/:id); use orderId for display and search.
+
+================================================================================
+End of document. Backend repo: yuk24-backend. Frontend: yuk24-frontend (React, Vite).
+================================================================================
