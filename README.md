@@ -58,7 +58,7 @@ REST API backend for **YUK 24** on-demand cargo delivery. Built with Node.js, Ex
 
 - `GET  /api/health` — Health check (DB status).
 - `POST /api/route` — Body: `{ start: [lat, lng], end: [lat, lng] }` → `{ distanceKm, durationMin, geometry? }`. Uses ORS if `ORS_API_KEY` is set; otherwise Haversine fallback.
-- `POST /api/price` — Body: `{ distanceKm, loadSize, unloading }` → `{ price }`. Server-side pricing (single source of truth).
+- `POST /api/price` — Body: `{ distanceKm, loadSize, unloading }` → `{ price }`. Server-side pricing (single source of truth), UZS: `(10000 + distanceKm * 3000) * loadMultiplier + (unloading ? 20000 : 0)`, where the multiplier (xsmall=1.0, small=1.2, medium=1.5, large=2.0, xlarge=2.5) applies to base + distance fee and the 20000 unloading fee is added after, rounded to a whole UZS.
 
 ### Auth
 

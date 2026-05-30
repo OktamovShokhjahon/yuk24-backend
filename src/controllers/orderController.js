@@ -21,11 +21,15 @@ async function createOrder(req, res) {
     durationMin,
     userId,
   } = req.body;
-  let { price } = req.body;
-  const computed = calculatePrice({ distanceKm, loadSize, unloading: !!unloading });
-  if (Math.abs((price ?? 0) - computed) > 0.02) {
-    price = computed;
+  const { price } = req.body;
+  const computed = calculatePrice({ distanceKm, loadSize, unloading });
+  if (typeof price !== 'number' || !Number.isFinite(price) || Math.abs(price - computed) > 1) {
+    return res.status(400).json({
+      error: 'Price mismatch',
+      details: `Client price ${price} differs from server-computed price ${computed} by more than 1 UZS`,
+    });
   }
+  const finalPrice = computed;
   const orderId = await getNextOrderId();
   const order = await Order.create({
     orderId,
@@ -34,8 +38,8 @@ async function createOrder(req, res) {
     pickup: { label: pickup.label, coords: pickup.coords },
     delivery: { label: delivery.label, coords: delivery.coords },
     loadSize,
-    unloading: !!unloading,
-    price,
+    unloading,
+    price: finalPrice,
     distanceKm,
     durationMin: durationMin ?? undefined,
     status: 'queue',

@@ -1,5 +1,5 @@
 const config = require('../config');
-const { calculatePrice } = require('../utils/pricing');
+const { calculatePrice, PriceInputError } = require('../utils/pricing');
 
 async function getRoute(req, res) {
   const { start, end } = req.body;
@@ -54,15 +54,15 @@ async function getRoute(req, res) {
 
 async function getPrice(req, res) {
   const { distanceKm, loadSize, unloading } = req.body;
-  const loadSizes = ['xsmall', 'small', 'medium', 'large', 'xlarge'];
-  if (typeof distanceKm !== 'number' || distanceKm < 0) {
-    return res.status(400).json({ error: 'distanceKm must be a non-negative number' });
+  try {
+    const price = calculatePrice({ distanceKm, loadSize, unloading });
+    res.json({ price });
+  } catch (err) {
+    if (err instanceof PriceInputError) {
+      return res.status(400).json({ error: 'Validation failed', details: [{ message: err.message }] });
+    }
+    throw err;
   }
-  if (!loadSizes.includes(loadSize)) {
-    return res.status(400).json({ error: 'loadSize must be one of: ' + loadSizes.join(', ') });
-  }
-  const price = calculatePrice({ distanceKm, loadSize, unloading: !!unloading });
-  res.json({ price });
 }
 
 module.exports = { getRoute, getPrice };

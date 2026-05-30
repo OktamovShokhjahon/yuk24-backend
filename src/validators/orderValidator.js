@@ -27,7 +27,7 @@ const createOrderRules = [
     return typeof lat === 'number' && typeof lng === 'number' && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
   }).withMessage('delivery must have label and coords [lat, lng]'),
   body('loadSize').isIn(['xsmall', 'small', 'medium', 'large', 'xlarge']).withMessage('Invalid loadSize'),
-  body('unloading').optional().isBoolean(),
+  body('unloading').isBoolean({ strict: true }).withMessage('unloading must be a boolean'),
   body('price').isFloat({ min: 0 }).withMessage('price must be non-negative number'),
   body('distanceKm').isFloat({ min: 0 }).withMessage('distanceKm must be non-negative number'),
   body('durationMin').optional().isInt({ min: 0 }),

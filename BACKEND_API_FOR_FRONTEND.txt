@@ -51,7 +51,7 @@ AI/developers: replace frontend mocks with calls to these endpoints.
 - POST /api/price
 - Body (JSON): { "distanceKm": number, "loadSize": "xsmall"|"small"|"medium"|"large"|"xlarge", "unloading": boolean }
 - Success 200: { "price": number }
-- Frontend should call this to get the price to display and to send when creating an order. Backend formula: base + (distanceKm - 5) * 2 per km, multiplied by load size (xsmall=1, small=1.2, medium=1.5, large=2, xlarge=2.5), plus 5 if unloading.
+- Frontend should call this to get the price to display and to send when creating an order. Backend formula (UZS): total = (BASE_PRICE + distanceKm * PRICE_PER_KM) * loadMultiplier + unloadingFee, where BASE_PRICE = 10000, PRICE_PER_KM = 3000 (charged from km 0, no free distance), loadMultiplier (xsmall=1.0, small=1.2, medium=1.5, large=2.0, xlarge=2.5) applies to BASE_PRICE + distance fee, and unloadingFee = 20000 added AFTER the multiplier only if unloading is true. Result rounded to a whole UZS.
 
 4. CUSTOMER / ORDER ENDPOINTS (no auth for create and list by phone)
 --------------------------------------------------------------------
