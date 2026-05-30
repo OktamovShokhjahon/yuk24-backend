@@ -26,7 +26,7 @@ router.post(
   [
     body('distanceKm').isFloat({ min: 0 }).withMessage('distanceKm required and >= 0'),
     body('loadSize').isIn(['xsmall', 'small', 'medium', 'large', 'xlarge']).withMessage('Invalid loadSize'),
-    body('unloading').optional().isBoolean(),
+    body('unloading').isBoolean({ strict: true }).withMessage('unloading must be a boolean'),
   ],
   handleValidation,
   getPrice
