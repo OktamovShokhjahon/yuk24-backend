@@ -15,6 +15,7 @@ router.post('/orders/:id/cancel', orderIdParam, [body('reason').optional().trim(
 router.post('/orders/:id/picked-up', orderIdParam, handleValidation, driverController.setPickedUp);
 router.post('/orders/:id/delivered', orderIdParam, [body('completedAt').optional().isISO8601()], handleValidation, driverController.setDelivered);
 router.get('/me', driverController.getMe);
+router.get('/reviews', driverController.getMyReviews);
 router.patch('/location', [
   body('lat').isFloat({ min: -90, max: 90 }).withMessage('lat required'),
   body('lng').isFloat({ min: -180, max: 180 }).withMessage('lng required'),

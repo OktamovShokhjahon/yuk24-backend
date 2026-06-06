@@ -1,4 +1,4 @@
-const { Order } = require('../models');
+const { Order, Review } = require('../models');
 
 async function getAvailableOrders(req, res) {
   const orders = await Order.find({ status: 'queue', deletedAt: null })
@@ -73,15 +73,64 @@ async function setDelivered(req, res) {
   res.json(order);
 }
 
+async function loadDriverReviews(driverId) {
+  const [reviewDocs, embeddedOrders] = await Promise.all([
+    Review.find({ driverId }).sort({ createdAt: -1 }).lean(),
+    Order.find({
+      driverId,
+      status: 'delivered',
+      deletedAt: null,
+      'review.rating': { $exists: true, $ne: null },
+    })
+      .select('orderId review customerName customerPhone completedAt createdAt')
+      .lean(),
+  ]);
+
+  const orderMongoIds = reviewDocs.map((r) => r.orderId).filter(Boolean);
+  const orders = orderMongoIds.length
+    ? await Order.find({ _id: { $in: orderMongoIds } }).select('orderId').lean()
+    : [];
+  const displayOrderIdByMongoId = Object.fromEntries(
+    orders.map((o) => [String(o._id), o.orderId])
+  );
+
+  const fromCollection = reviewDocs.map((r) => ({
+    rating: r.rating,
+    comment: r.comment || '',
+    customerName: r.customerName || r.customerPhone || 'Customer',
+    orderId: displayOrderIdByMongoId[String(r.orderId)] || String(r.orderId),
+    createdAt: r.createdAt,
+  }));
+
+  const coveredOrderIds = new Set(reviewDocs.map((r) => String(r.orderId)));
+  const fromOrders = embeddedOrders
+    .filter((o) => !coveredOrderIds.has(String(o._id)) && o.review?.rating)
+    .map((o) => ({
+      rating: o.review.rating,
+      comment: o.review.comment || '',
+      customerName: o.customerName || o.customerPhone || 'Customer',
+      orderId: o.orderId || String(o._id),
+      createdAt: o.completedAt || o.createdAt,
+    }));
+
+  return [...fromCollection, ...fromOrders].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
+
 async function getMe(req, res) {
   const driver = req.driver;
-  const completedCount = await Order.countDocuments({ driverId: driver._id, status: 'delivered', deletedAt: null });
-  const cancelledCount = await Order.countDocuments({ driverId: driver._id, status: 'cancelled', deletedAt: null });
-  const delivered = await Order.find({ driverId: driver._id, status: 'delivered', deletedAt: null })
-    .select('durationMin completedAt')
-    .lean();
+  const [completedCount, cancelledCount, delivered, reviews] = await Promise.all([
+    Order.countDocuments({ driverId: driver._id, status: 'delivered', deletedAt: null }),
+    Order.countDocuments({ driverId: driver._id, status: 'cancelled', deletedAt: null }),
+    Order.find({ driverId: driver._id, status: 'delivered', deletedAt: null })
+      .select('durationMin completedAt')
+      .lean(),
+    loadDriverReviews(driver._id),
+  ]);
   const totalMin = delivered.reduce((acc, o) => acc + (o.durationMin || 0), 0);
   const avgDeliveryMin = delivered.length ? Math.round(totalMin / delivered.length) : null;
+
   const profile = driver.toJSON ? driver.toJSON() : driver;
   res.json({
     ...profile,
@@ -90,7 +139,16 @@ async function getMe(req, res) {
       cancelledOrders: cancelledCount,
       avgDeliveryMin,
     },
+    reviews,
   });
+}
+
+async function getMyReviews(req, res) {
+  const reviews = await loadDriverReviews(req.driver._id);
+  const avgRating = reviews.length
+    ? Math.round((reviews.reduce((sum, r) => sum + (r.rating || 0), 0) / reviews.length) * 10) / 10
+    : null;
+  res.json({ reviews, avgRating, count: reviews.length });
 }
 
 async function updateLocation(req, res) {
@@ -115,5 +173,6 @@ module.exports = {
   setPickedUp,
   setDelivered,
   getMe,
+  getMyReviews,
   updateLocation,
 };
