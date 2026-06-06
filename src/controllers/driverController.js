@@ -144,11 +144,59 @@ async function getMe(req, res) {
 }
 
 async function getMyReviews(req, res) {
-  const reviews = await loadDriverReviews(req.driver._id);
-  const avgRating = reviews.length
-    ? Math.round((reviews.reduce((sum, r) => sum + (r.rating || 0), 0) / reviews.length) * 10) / 10
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+  const driverId = req.driver._id;
+
+  const [total, reviewDocs, avgAgg] = await Promise.all([
+    Review.countDocuments({ driverId }),
+    Review.find({ driverId })
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate('orderId', 'orderId completedAt')
+      .lean(),
+    Review.aggregate([
+      { $match: { driverId } },
+      { $group: { _id: null, avg: { $avg: '$rating' } } },
+    ]),
+  ]);
+
+  const reviews = reviewDocs.map((r) => ({
+    _id: r._id,
+    orderId: r.orderId
+      ? {
+          _id: r.orderId._id,
+          orderId: r.orderId.orderId,
+          completedAt: r.orderId.completedAt,
+        }
+      : null,
+    driverId: r.driverId,
+    rating: r.rating,
+    comment: r.comment || '',
+    customerName: r.customerName,
+    customerPhone: r.customerPhone,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  }));
+
+  const avgRating = avgAgg[0]?.avg != null
+    ? Math.round(avgAgg[0].avg * 10) / 10
     : null;
-  res.json({ reviews, avgRating, count: reviews.length });
+
+  res.json({
+    reviews,
+    summary: {
+      avgRating,
+      totalReviews: total,
+    },
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    },
+  });
 }
 
 async function updateLocation(req, res) {
