@@ -1,4 +1,4 @@
-const { Order } = require('../models');
+const { Order, Review } = require('../models');
 
 async function getAvailableOrders(req, res) {
   const orders = await Order.find({ status: 'queue', deletedAt: null })
@@ -93,6 +93,37 @@ async function getMe(req, res) {
   });
 }
 
+async function getMyReviews(req, res) {
+  const driverId = req.driver._id;
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+  const filter = { driverId };
+
+  const [reviews, total, avgResult] = await Promise.all([
+    Review.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate('orderId', 'orderId completedAt')
+      .lean(),
+    Review.countDocuments(filter),
+    Review.aggregate([
+      { $match: filter },
+      { $group: { _id: null, avgRating: { $avg: '$rating' } } },
+    ]),
+  ]);
+
+  const avgRating = avgResult[0]?.avgRating != null
+    ? Math.round(avgResult[0].avgRating * 10) / 10
+    : null;
+
+  res.json({
+    reviews,
+    summary: { avgRating, totalReviews: total },
+    pagination: { page, limit, total, pages: Math.ceil(total / limit) || 0 },
+  });
+}
+
 async function updateLocation(req, res) {
   const { lat, lng } = req.body;
   const driver = req.driver;
@@ -115,5 +146,6 @@ module.exports = {
   setPickedUp,
   setDelivered,
   getMe,
+  getMyReviews,
   updateLocation,
 };
